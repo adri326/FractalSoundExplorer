@@ -127,13 +127,13 @@ static const Fractal all_fractals[] = {
   chirikov,
 };
 
-struct AudioChunk {
-    int16_t *samples;
-    int32_t sampleCount;
-};
-
 sf::SoundBuffer generateAudioBuffer(double x, double y) {
-    //Setup the chunk info
+
+    struct AudioChunk {
+        int16_t *samples;
+        int32_t sampleCount;
+    };
+
     struct AudioChunk data;
     data.sampleCount = 4096;
     data.samples = (int16_t*) malloc(sizeof(data.samples) * data.sampleCount);
@@ -146,28 +146,28 @@ sf::SoundBuffer generateAudioBuffer(double x, double y) {
     double play_y = y;
     double play_px = x;
     double play_py = y;
-    double mean_x = x;
-    double mean_y = y;
     double volume = 8000.0;
 
     //Generate the tones
 
     double dx, dy, dpx, dpy;
     const int steps = sample_rate / max_freq;
-    for (int i = 0; i < 4096; i+=2) {
+    for (int i = 0; i < data.sampleCount; i+=2) {
       const int j = m_audio_time % steps;
       if (j == 0) {
         play_px = play_x;
         play_py = play_y;
+
         fractal(play_x, play_y, play_cx, play_cy);
+
         if (play_x*play_x + play_y*play_y > escape_radius_sq) {
           return sf::SoundBuffer();
         }
         if (normalized) {
-          double dpx = play_px - play_cx;
-          double dpy = play_py - play_cy;
-          double dx = play_x - play_cx;
-          double dy = play_y - play_cy;
+          dpx = play_px - play_cx;
+          dpy = play_py - play_cy;
+          dx = play_x - play_cx;
+          dy = play_y - play_cy;
           if (dx != 0.0 || dy != 0.0) {
             double dpmag = 1.0 / std::sqrt(1e-12 + dpx*dpx + dpy*dpy);
             double dmag = 1.0 / std::sqrt(1e-12 + dx*dx + dy*dy);
@@ -176,17 +176,7 @@ sf::SoundBuffer generateAudioBuffer(double x, double y) {
             dx *= dmag;
             dy *= dmag;
           }
-        } else {
-          //Point is relative to mean
-          dx = play_x - mean_x;
-          dy = play_y - mean_y;
-          dpx = play_px - mean_x;
-          dpy = play_py - mean_y;
         }
-
-        //Update mean
-        mean_x = mean_x*0.99 + play_x*0.01;
-        mean_y = mean_y*0.99 + play_y*0.01;
 
         //Don't let the volume go to infinity, clamp.
         double m = dx*dx + dy*dy;
@@ -210,9 +200,9 @@ sf::SoundBuffer generateAudioBuffer(double x, double y) {
       double t = double(j) / double(steps);
       t = 0.5 - 0.5*std::cos(t * 3.14159);
 
-      std::cout << "t: " << t << " x: " << x << " y: " << y << std::endl;
-      std::cout << "t: " << t << " dx: " << dx << " dpx: " << dpx << std::endl;
-      std::cout << "t: " << t << " dy: " << dy << " dpy: " << dpy << std::endl << std::endl;
+      // std::cout << "t: " << t << " x: " << x << " y: " << y << std::endl;
+      // std::cout << "t: " << t << " dx: " << dx << " dpx: " << dpx << std::endl;
+      // std::cout << "t: " << t << " dy: " << dy << " dpy: " << dpy << std::endl << std::endl;
       double wx = t*dx + (1.0 - t)*dpx;
       double wy = t*dy + (1.0 - t)*dpy;
 
@@ -258,8 +248,7 @@ void make_window(sf::RenderWindow& window, sf::RenderTexture& rt, const sf::Cont
     window.create(screenSize, window_name, sf::Style::Resize | sf::Style::Close, settings);
   }
   resize_window(window, rt, settings, screenSize.width, screenSize.height);
-  // window.setFramerateLimit(target_fps);
-  window.setFramerateLimit(10);
+  window.setFramerateLimit(target_fps);
   //window.setVerticalSyncEnabled(true);
   window.setKeyRepeatEnabled(false);
   window.requestFocus();
@@ -321,7 +310,7 @@ int main() {
 
   sf::Sound snd = sf::Sound();
   sf::SoundBuffer snd_buff = sf::SoundBuffer();
-  snd.play();
+  snd.setLoop(true);
 
   //Setup the shader
   shader.setUniform("iCam", sf::Vector2f((float)cam_x, (float)cam_y));
@@ -398,6 +387,7 @@ int main() {
 
           snd_buff = generateAudioBuffer(px, py);
           snd.setBuffer(snd_buff);
+          snd.play();
 
           orbit_x = px;
           orbit_y = py;
@@ -419,6 +409,7 @@ int main() {
           ScreenToPt(event.mouseMove.x, event.mouseMove.y, px, py);
           snd_buff = generateAudioBuffer(px, py);
           snd.setBuffer(snd_buff);
+          snd.play();
           orbit_x = px;
           orbit_y = py;
         }
