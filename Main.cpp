@@ -127,42 +127,55 @@ static const Fractal all_fractals[] = {
   chirikov,
 };
 
-sf::SoundBuffer generateAudioBuffer(double x, double y) {
+class FractalStream: public sf::SoundStream {
+public:
+  double volume;
+  double play_x, play_y;
+  double play_cx, play_cy;
+  double play_nx, play_ny;
+  double play_px, play_py;
 
-    struct AudioChunk {
-        int16_t *samples;
-        int32_t sampleCount;
-    };
+  static const size_t AUDIO_BUFF_SIZE = 4096;
 
-    struct AudioChunk data;
-    data.sampleCount = 4096 * 10;
-    data.samples = (int16_t*) calloc(sizeof(data.samples), data.sampleCount);
+  FractalStream() : sf::SoundStream() {
+    initialize(2, sample_rate);
+  }
 
-    double mean_x = x;
-    double mean_y = y;
-    double play_cx = (jx < 1e8 ? jx : x);
-    double play_cy = (jy < 1e8 ? jy : y);
-    double play_x = x;
-    double play_y = y;
-    double play_px = x;
-    double play_py = y;
-    double volume = 8000.0;
+  void SetPoint(double x, double y) {
+    play_nx = x;
+    play_ny = y;
+
+    m_audio_time = 0;
+    play_cx = (jx < 1e8 ? jx : play_nx);
+    play_cy = (jy < 1e8 ? jy : play_ny);
+    play_x = play_nx;
+    play_y = play_ny;
+    play_px = play_nx;
+    play_py = play_ny;
+    mean_x = play_nx;
+    mean_y = play_ny;
+    volume = 8000.0;
+  }
+
+  bool onGetData(Chunk& data) override {
+    //Setup the chunk info
+    data.samples = m_samples;
+    data.sampleCount = 4096;
+    memset(m_samples, 0, sizeof(m_samples));
 
     //Generate the tones
-
-    double dx, dy, dpx, dpy;
     const int steps = sample_rate / max_freq;
-    for (int i = 0; i < data.sampleCount; i+=2) {
-      const int j = i / 2 % steps;
-      if (i / 2 % steps == 0) {
+    for (size_t i = 0; i < data.sampleCount; i+=2) {
+      const int j = m_audio_time % steps;
+      if (j == 0) {
         play_px = play_x;
         play_py = play_y;
-
         fractal(play_x, play_y, play_cx, play_cy);
-
         if (play_x*play_x + play_y*play_y > escape_radius_sq) {
-          return sf::SoundBuffer();
+          pause();
+          return true;
         }
+
         if (normalized) {
           dpx = play_px - play_cx;
           dpy = play_py - play_cy;
@@ -209,24 +222,34 @@ sf::SoundBuffer generateAudioBuffer(double x, double y) {
       //Cosine interpolation
       double t = double(j) / double(steps);
       t = 0.5 - 0.5*std::cos(t * 3.14159);
-
       double wx = t*dx + (1.0 - t)*dpx;
       double wy = t*dy + (1.0 - t)*dpy;
 
       //Save the audio to the 2 channels
-      data.samples[i]   = (int16_t)std::min(std::max(wx * volume, -32000.0), 32000.0);
-      data.samples[i+1] = (int16_t)std::min(std::max(wy * volume, -32000.0), 32000.0);
+      m_samples[i]   = (int16_t)std::min(std::max(wx * volume, -32000.0), 32000.0);
+      m_samples[i+1] = (int16_t)std::min(std::max(wy * volume, -32000.0), 32000.0);
+      m_audio_time += 1;
     }
 
-    auto buff = sf::SoundBuffer();
-    buff.loadFromSamples(data.samples, data.sampleCount, 2, sample_rate);
-    // buff.saveToFile("./audio_data.wav");
-    free(data.samples);
-    return buff;
-}
+    //Return the sound clip
+    return true;
+  }
+
+  // not implemented
+  void onSeek(sf::Time timeOffset) override { }
+
+  int16_t m_samples[AUDIO_BUFF_SIZE];
+  int32_t m_audio_time;
+  double mean_x;
+  double mean_y;
+  double dx;
+  double dy;
+  double dpx;
+  double dpy;
+};
 
 //Change the fractal
-void SetFractal(sf::Shader& shader, int type, sf::Sound snd) {
+void SetFractal(sf::Shader& shader, int type, sf::SoundStream &snd) {
   shader.setUniform("iType", type);
   jx = jy = 1e8;
   fractal = all_fractals[type];
@@ -244,6 +267,7 @@ void resize_window(sf::RenderWindow& window, sf::RenderTexture& rt, const sf::Co
   window.setView(sf::View(sf::FloatRect(0, 0, (float)w, (float)h)));
   frame = 0;
 }
+
 void make_window(sf::RenderWindow& window, sf::RenderTexture& rt, const sf::ContextSettings& settings, bool is_fullscreen) {
   window.close();
   sf::VideoMode screenSize;
@@ -315,9 +339,7 @@ int main() {
   bool toggle_fullscreen = false;
   make_window(window, renderTexture, settings, is_fullscreen);
 
-  sf::Sound snd = sf::Sound();
-  sf::SoundBuffer snd_buff = sf::SoundBuffer();
-  snd.setLoop(true);
+  FractalStream snd;
 
   //Setup the shader
   shader.setUniform("iCam", sf::Vector2f((float)cam_x, (float)cam_y));
@@ -392,8 +414,7 @@ int main() {
           hide_orbit = false;
           ScreenToPt(event.mouseButton.x, event.mouseButton.y, px, py);
 
-          snd_buff = generateAudioBuffer(px, py);
-          snd.setBuffer(snd_buff);
+          snd.SetPoint(px, py);
           snd.play();
 
           orbit_x = px;
@@ -414,8 +435,7 @@ int main() {
       } else if (event.type == sf::Event::MouseMoved) {
         if (leftPressed) {
           ScreenToPt(event.mouseMove.x, event.mouseMove.y, px, py);
-          snd_buff = generateAudioBuffer(px, py);
-          snd.setBuffer(snd_buff);
+          snd.SetPoint(px, py);
           snd.play();
           orbit_x = px;
           orbit_y = py;
