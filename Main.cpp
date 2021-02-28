@@ -135,11 +135,11 @@ sf::SoundBuffer generateAudioBuffer(double x, double y) {
     };
 
     struct AudioChunk data;
-    data.sampleCount = 4096;
-    data.samples = (int16_t*) malloc(sizeof(data.samples) * data.sampleCount);
-    std::memset(data.samples, 0, data.sampleCount);
+    data.sampleCount = 4096 * 10;
+    data.samples = (int16_t*) calloc(sizeof(data.samples), data.sampleCount);
 
-    uint m_audio_time = 0;
+    double mean_x = x;
+    double mean_y = y;
     double play_cx = (jx < 1e8 ? jx : x);
     double play_cy = (jy < 1e8 ? jy : y);
     double play_x = x;
@@ -153,8 +153,8 @@ sf::SoundBuffer generateAudioBuffer(double x, double y) {
     double dx, dy, dpx, dpy;
     const int steps = sample_rate / max_freq;
     for (int i = 0; i < data.sampleCount; i+=2) {
-      const int j = m_audio_time % steps;
-      if (j == 0) {
+      const int j = i / 2 % steps;
+      if (i / 2 % steps == 0) {
         play_px = play_x;
         play_py = play_y;
 
@@ -176,7 +176,17 @@ sf::SoundBuffer generateAudioBuffer(double x, double y) {
             dx *= dmag;
             dy *= dmag;
           }
+        } else {
+          //Point is relative to mean
+          dx = play_x - mean_x;
+          dy = play_y - mean_y;
+          dpx = play_px - mean_x;
+          dpy = play_py - mean_y;
         }
+
+        //Update mean
+        mean_x = mean_x*0.99 + play_x*0.01;
+        mean_y = mean_y*0.99 + play_y*0.01;
 
         //Don't let the volume go to infinity, clamp.
         double m = dx*dx + dy*dy;
@@ -200,21 +210,18 @@ sf::SoundBuffer generateAudioBuffer(double x, double y) {
       double t = double(j) / double(steps);
       t = 0.5 - 0.5*std::cos(t * 3.14159);
 
-      // std::cout << "t: " << t << " x: " << x << " y: " << y << std::endl;
-      // std::cout << "t: " << t << " dx: " << dx << " dpx: " << dpx << std::endl;
-      // std::cout << "t: " << t << " dy: " << dy << " dpy: " << dpy << std::endl << std::endl;
       double wx = t*dx + (1.0 - t)*dpx;
       double wy = t*dy + (1.0 - t)*dpy;
 
       //Save the audio to the 2 channels
       data.samples[i]   = (int16_t)std::min(std::max(wx * volume, -32000.0), 32000.0);
       data.samples[i+1] = (int16_t)std::min(std::max(wy * volume, -32000.0), 32000.0);
-
-      m_audio_time += 1;
     }
 
     auto buff = sf::SoundBuffer();
     buff.loadFromSamples(data.samples, data.sampleCount, 2, sample_rate);
+    // buff.saveToFile("./audio_data.wav");
+    free(data.samples);
     return buff;
 }
 
