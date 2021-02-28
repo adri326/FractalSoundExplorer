@@ -1,3 +1,4 @@
+// clang-format off
 #include "WinAudio.h"
 #include <Mmreg.h>
 #include <iostream>

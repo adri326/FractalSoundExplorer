@@ -1,11 +1,12 @@
 // clang-format off
 #define _USE_MATH_DEFINES
 #define _CRT_SECURE_NO_WARNINGS
-#include "WinAudio.h"
+#include <SFML/Audio.hpp>
 #include <SFML/Graphics.hpp>
 #include <SFML/OpenGL.hpp>
 #include <iostream>
 #include <complex>
+#include <cstring>
 #include <math.h>
 #include <fstream>
 
@@ -126,82 +127,47 @@ static const Fractal all_fractals[] = {
   chirikov,
 };
 
-//Synthesizer class to inherit Windows Audio.
-class Synth : public WinAudio {
-public:
-  bool audio_reset;
-  bool audio_pause;
-  double volume;
-  double play_x, play_y;
-  double play_cx, play_cy;
-  double play_nx, play_ny;
-  double play_px, play_py;
+struct AudioChunk {
+    int16_t *samples;
+    int32_t sampleCount;
+};
 
-  Synth(HWND hwnd) : WinAudio(hwnd, sample_rate) {
-    audio_reset = true;
-    audio_pause = false;
-    volume = 8000.0;
-    play_x = 0.0;
-    play_y = 0.0;
-    play_cx = 0.0;
-    play_cy = 0.0;
-    play_nx = 0.0;
-    play_ny = 0.0;
-    play_px = 0.0;
-    play_py = 0.0;
-  }
-
-  void SetPoint(double x, double y) {
-    play_nx = x;
-    play_ny = y;
-    audio_reset = true;
-    audio_pause = false;
-  }
-
-  virtual bool onGetData(Chunk& data) override {
+sf::SoundBuffer generateAudioBuffer(double x, double y) {
     //Setup the chunk info
-    data.samples = m_samples;
-    data.sampleCount = AUDIO_BUFF_SIZE;
-    memset(m_samples, 0, sizeof(m_samples));
+    struct AudioChunk data;
+    data.sampleCount = 4096;
+    data.samples = (int16_t*) malloc(sizeof(data.samples) * data.sampleCount);
+    std::memset(data.samples, 0, data.sampleCount);
 
-    //Check if audio needs to reset
-    if (audio_reset) {
-      m_audio_time = 0;
-      play_cx = (jx < 1e8 ? jx : play_nx);
-      play_cy = (jy < 1e8 ? jy : play_ny);
-      play_x = play_nx;
-      play_y = play_ny;
-      play_px = play_nx;
-      play_py = play_ny;
-      mean_x = play_nx;
-      mean_y = play_ny;
-      volume = 8000.0;
-      audio_reset = false;
-    }
-
-    //Check if paused
-    if (audio_pause) {
-      return true;
-    }
+    uint m_audio_time = 0;
+    double play_cx = (jx < 1e8 ? jx : x);
+    double play_cy = (jy < 1e8 ? jy : y);
+    double play_x = x;
+    double play_y = y;
+    double play_px = x;
+    double play_py = y;
+    double mean_x = x;
+    double mean_y = y;
+    double volume = 8000.0;
 
     //Generate the tones
+
+    double dx, dy, dpx, dpy;
     const int steps = sample_rate / max_freq;
-    for (int i = 0; i < AUDIO_BUFF_SIZE; i+=2) {
+    for (int i = 0; i < 4096; i+=2) {
       const int j = m_audio_time % steps;
       if (j == 0) {
         play_px = play_x;
         play_py = play_y;
         fractal(play_x, play_y, play_cx, play_cy);
         if (play_x*play_x + play_y*play_y > escape_radius_sq) {
-          audio_pause = true;
-          return true;
+          return sf::SoundBuffer();
         }
-
         if (normalized) {
-          dpx = play_px - play_cx;
-          dpy = play_py - play_cy;
-          dx = play_x - play_cx;
-          dy = play_y - play_cy;
+          double dpx = play_px - play_cx;
+          double dpy = play_py - play_cy;
+          double dx = play_x - play_cx;
+          double dy = play_y - play_cy;
           if (dx != 0.0 || dy != 0.0) {
             double dpmag = 1.0 / std::sqrt(1e-12 + dpx*dpx + dpy*dpy);
             double dmag = 1.0 / std::sqrt(1e-12 + dx*dx + dy*dy);
@@ -243,36 +209,32 @@ public:
       //Cosine interpolation
       double t = double(j) / double(steps);
       t = 0.5 - 0.5*std::cos(t * 3.14159);
+
+      std::cout << "t: " << t << " x: " << x << " y: " << y << std::endl;
+      std::cout << "t: " << t << " dx: " << dx << " dpx: " << dpx << std::endl;
+      std::cout << "t: " << t << " dy: " << dy << " dpy: " << dpy << std::endl << std::endl;
       double wx = t*dx + (1.0 - t)*dpx;
       double wy = t*dy + (1.0 - t)*dpy;
 
       //Save the audio to the 2 channels
-      m_samples[i]   = (int16_t)std::min(std::max(wx * volume, -32000.0), 32000.0);
-      m_samples[i+1] = (int16_t)std::min(std::max(wy * volume, -32000.0), 32000.0);
+      data.samples[i]   = (int16_t)std::min(std::max(wx * volume, -32000.0), 32000.0);
+      data.samples[i+1] = (int16_t)std::min(std::max(wy * volume, -32000.0), 32000.0);
+
       m_audio_time += 1;
     }
 
-    //Return the sound clip
-    return !audio_reset;
-  }
-
-  int16_t m_samples[AUDIO_BUFF_SIZE];
-  int32_t m_audio_time;
-  double mean_x;
-  double mean_y;
-  double dx;
-  double dy;
-  double dpx;
-  double dpy;
-};
+    auto buff = sf::SoundBuffer();
+    buff.loadFromSamples(data.samples, data.sampleCount, 2, sample_rate);
+    return buff;
+}
 
 //Change the fractal
-void SetFractal(sf::Shader& shader, int type, Synth& synth) {
+void SetFractal(sf::Shader& shader, int type, sf::Sound snd) {
   shader.setUniform("iType", type);
   jx = jy = 1e8;
   fractal = all_fractals[type];
   normalized = (type == 0);
-  synth.audio_pause = true;
+  snd.pause();
   hide_orbit = true;
   frame = 0;
 }
@@ -296,7 +258,8 @@ void make_window(sf::RenderWindow& window, sf::RenderTexture& rt, const sf::Cont
     window.create(screenSize, window_name, sf::Style::Resize | sf::Style::Close, settings);
   }
   resize_window(window, rt, settings, screenSize.width, screenSize.height);
-  window.setFramerateLimit(target_fps);
+  // window.setFramerateLimit(target_fps);
+  window.setFramerateLimit(10);
   //window.setVerticalSyncEnabled(true);
   window.setKeyRepeatEnabled(false);
   window.requestFocus();
@@ -306,7 +269,7 @@ void make_window(sf::RenderWindow& window, sf::RenderTexture& rt, const sf::Cont
 #if _WIN32
 INT WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR lpCmdLine, INT nCmdShow) {
 #else
-int main(int argc, char *argv[]) {
+int main() {
 #endif
   //Make sure shader is supported
   if (!sf::Shader::isAvailable()) {
@@ -356,16 +319,14 @@ int main(int argc, char *argv[]) {
   bool toggle_fullscreen = false;
   make_window(window, renderTexture, settings, is_fullscreen);
 
-  //Create audio synth
-  Synth synth(window.getSystemHandle());
+  sf::Sound snd = sf::Sound();
+  sf::SoundBuffer snd_buff = sf::SoundBuffer();
+  snd.play();
 
   //Setup the shader
   shader.setUniform("iCam", sf::Vector2f((float)cam_x, (float)cam_y));
   shader.setUniform("iZoom", (float)cam_zoom);
-  SetFractal(shader, starting_fractal, synth);
-
-  //Start the synth
-  synth.play();
+  SetFractal(shader, starting_fractal, snd);
 
   //Main Loop
   double px, py, orbit_x, orbit_y;
@@ -389,7 +350,7 @@ int main(int argc, char *argv[]) {
           window.close();
           break;
         } else if (keycode >= sf::Keyboard::Num1 && keycode <= sf::Keyboard::Num8) {
-          SetFractal(shader, keycode - sf::Keyboard::Num1, synth);
+          SetFractal(shader, keycode - sf::Keyboard::Num1, snd);
         } else if (keycode == sf::Keyboard::F11) {
           toggle_fullscreen = true;
         } else if (keycode == sf::Keyboard::D) {
@@ -410,7 +371,8 @@ int main(int argc, char *argv[]) {
             const sf::Vector2i mousePos = sf::Mouse::getPosition(window);
             ScreenToPt(mousePos.x, mousePos.y, jx, jy);
           }
-          synth.audio_pause = true;
+
+          snd.pause();
           hide_orbit = true;
           frame = 0;
         } else if (keycode == sf::Keyboard::S) {
@@ -433,14 +395,17 @@ int main(int argc, char *argv[]) {
           leftPressed = true;
           hide_orbit = false;
           ScreenToPt(event.mouseButton.x, event.mouseButton.y, px, py);
-          synth.SetPoint(px, py);
+
+          snd_buff = generateAudioBuffer(px, py);
+          snd.setBuffer(snd_buff);
+
           orbit_x = px;
           orbit_y = py;
         } else if (event.mouseButton.button == sf::Mouse::Middle) {
           prevDrag = sf::Vector2i(event.mouseButton.x, event.mouseButton.y);
           dragging = true;
         } else if (event.mouseButton.button == sf::Mouse::Right) {
-          synth.audio_pause = true;
+          snd.pause();
           hide_orbit = true;
         }
       } else if (event.type == sf::Event::MouseButtonReleased) {
@@ -452,7 +417,8 @@ int main(int argc, char *argv[]) {
       } else if (event.type == sf::Event::MouseMoved) {
         if (leftPressed) {
           ScreenToPt(event.mouseMove.x, event.mouseMove.y, px, py);
-          synth.SetPoint(px, py);
+          snd_buff = generateAudioBuffer(px, py);
+          snd.setBuffer(snd_buff);
           orbit_x = px;
           orbit_y = py;
         }
@@ -606,6 +572,6 @@ int main(int argc, char *argv[]) {
   }
 
   //Stop the synth before quitting
-  synth.stop();
+  snd.stop();
   return 0;
 }
